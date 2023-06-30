@@ -1,4 +1,5 @@
 #include <unistd.h>
+#include <cstring>
 
 struct MallocMetadata {
     size_t size;
@@ -92,11 +93,9 @@ void* scalloc(size_t num, size_t size) {
 
     char* block_as_bytes = (char*)(addr + 1);
 
-    for (int i = 0; i < num * size; ++i) {
-        block_as_bytes[i] = 0;
-    }
+    std::memset(addr + 1, 0, num * size);
 
-    return block_as_bytes;
+    return addr + 1;
 }
 
 void sfree(void* p) {
@@ -129,9 +128,7 @@ void *srealloc(void* oldp, size_t size) {
         return nullptr;
     }
 
-    for (int i = 0; i < size; ++i) {
-        newp[i] = ((char*)oldp)[i];
-    }
+    std::memmove(newp, oldp, size);
 
     _setBlockFree(old_block, true);
     return newp;
