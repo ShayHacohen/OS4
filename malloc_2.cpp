@@ -11,7 +11,22 @@ MallocMetadata *allocations = nullptr;
 MallocMetadata *last = nullptr;
 
 int free_blocks = 0;
-int allocated_blocks = 0;
+int total_allocated_blocks = 0;
+size_t allocated_space = 0;
+size_t free_space = 0;
+
+void _setBlockFree(MallocMetadata *block, bool free_value) {
+    if (free_value == block->is_free) return;
+    if (free_value) {
+        free_space += block->size;
+        ++free_blocks;
+    }
+    else {
+        free_space -= block->size;
+        --free_blocks;
+    }
+    block->is_free = free_value;
+}
 
 MallocMetadata *_findFreeBlock(size_t size) {
     auto curr = allocations;
@@ -29,6 +44,9 @@ MallocMetadata *_addBlock(size_t size) {
     if ((addr = (MallocMetadata *)sbrk(size + sizeof(MallocMetadata))) == (void*)-1) {
         return nullptr;
     }
+
+    ++total_allocated_blocks;
+    allocated_space += size;
 
     MallocMetadata metadata {
         size, false, nullptr, nullptr
@@ -49,12 +67,9 @@ MallocMetadata *_addBlock(size_t size) {
 MallocMetadata* _allocateBlock(size_t size) {
     if (size == 0 || size > 100000000) return nullptr;
 
-    ++allocated_blocks;
-
     auto block = _findFreeBlock(size);
     if (block) {
-        --free_blocks;
-        block->is_free = false;
+        _setBlockFree(block, false);
         return block;
     }
 
@@ -94,9 +109,7 @@ void sfree(void* p) {
         return;
     }
 
-    pointer->is_free = true;
-    ++free_blocks;
-    --allocated_blocks;
+    _setBlockFree(pointer, true);
 }
 
 void *srealloc(void* oldp, size_t size) {
@@ -120,6 +133,33 @@ void *srealloc(void* oldp, size_t size) {
         newp[i] = ((char*)oldp)[i];
     }
 
-    old_block->is_free = true;
+    _setBlockFree(old_block, true);
     return newp;
+}
+
+
+
+//STATISTICS FUNCTIONS:
+size_t _num_free_blocks() {
+    return free_blocks;
+}
+
+size_t _num_free_bytes() {
+    return free_space;
+}
+
+size_t _num_allocated_blocks() {
+    return total_allocated_blocks;
+}
+
+size_t _num_allocated_bytes() {
+    return allocated_space;
+}
+
+size_t _num_meta_data_bytes() {
+    return total_allocated_blocks * sizeof(MallocMetadata);
+}
+
+size_t _size_meta_data() {
+    return sizeof(MallocMetadata);
 }
