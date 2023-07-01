@@ -16,7 +16,7 @@ int total_allocated_blocks = 0;
 size_t allocated_space = 0;
 size_t free_space = 0;
 
-void _setBlockFree(MallocMetadata *block, bool free_value) {
+void __setBlockFree(MallocMetadata *block, bool free_value) {
     if (free_value == block->is_free) return;
     if (free_value) {
         free_space += block->size;
@@ -29,7 +29,7 @@ void _setBlockFree(MallocMetadata *block, bool free_value) {
     block->is_free = free_value;
 }
 
-MallocMetadata *_findFreeBlock(size_t size) {
+MallocMetadata *__findFreeBlock(size_t size) {
     auto curr = allocations;
     while (curr != nullptr) {
         if (curr->is_free && curr->size >= size) {
@@ -40,7 +40,7 @@ MallocMetadata *_findFreeBlock(size_t size) {
     return nullptr;
 }
 
-MallocMetadata *_addBlock(size_t size) {
+MallocMetadata *__addBlock(size_t size) {
     MallocMetadata *addr;
     if ((addr = (MallocMetadata *)sbrk(size + sizeof(MallocMetadata))) == (void*)-1) {
         return nullptr;
@@ -65,20 +65,20 @@ MallocMetadata *_addBlock(size_t size) {
     return addr;
 }
 
-MallocMetadata* _allocateBlock(size_t size) {
+MallocMetadata* __findOrAllocateBlock(size_t size) {
     if (size == 0 || size > 100000000) return nullptr;
 
-    auto block = _findFreeBlock(size);
+    auto block = __findFreeBlock(size);
     if (block) {
-        _setBlockFree(block, false);
+        __setBlockFree(block, false);
         return block;
     }
 
-    return _addBlock(size);
+    return __addBlock(size);
 }
 
 void* smalloc(size_t size) {
-    auto block_ptr = _allocateBlock(size);
+    auto block_ptr = __findOrAllocateBlock(size);
     if (block_ptr != nullptr) {
         block_ptr += 1;
     }
@@ -86,12 +86,10 @@ void* smalloc(size_t size) {
 }
 
 void* scalloc(size_t num, size_t size) {
-    auto addr = _allocateBlock(num * size);
+    auto addr = __findOrAllocateBlock(num * size);
     if (addr == nullptr) {
         return nullptr;
     }
-
-    char* block_as_bytes = (char*)(addr + 1);
 
     std::memset(addr + 1, 0, num * size);
 
@@ -108,7 +106,7 @@ void sfree(void* p) {
         return;
     }
 
-    _setBlockFree(pointer, true);
+    __setBlockFree(pointer, true);
 }
 
 void *srealloc(void* oldp, size_t size) {
@@ -130,7 +128,7 @@ void *srealloc(void* oldp, size_t size) {
 
     std::memmove(newp, oldp, size);
 
-    _setBlockFree(old_block, true);
+    __setBlockFree(old_block, true);
     return newp;
 }
 

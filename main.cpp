@@ -16,6 +16,9 @@ size_t _num_allocated_blocks();
 size_t _num_allocated_bytes();
 size_t _num_meta_data_bytes();
 size_t _size_meta_data();
+void TEST_print_orders();
+void TEST_print_blocks();
+void TEST_several_stuff();
 
 void print_stats(const char* after_func_name="") {
 #ifdef DEBUG
@@ -56,5 +59,9 @@ int main() {
     if (orig != str) {
         cout << ": " << "orig == " << (void*)orig << ", str == " << (void*)str << endl;
     }
+
+    //TEST_print_orders();
+    TEST_print_blocks();
+    TEST_several_stuff();
     return 0;
 }
