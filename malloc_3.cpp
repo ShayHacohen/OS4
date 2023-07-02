@@ -42,6 +42,7 @@ private:
     }
     float kb_to_b(float kb) { return kb / 1024; }
     float b_to_kb(float b) { return b * 1024; }
+
     MallocMetadata* __aux_getBlockByAddressTraversal(int order, int index) {
         return (MallocMetadata*)((char*)free_blocks[order] + order_map[order] * (index));
     }
@@ -141,6 +142,7 @@ private:
         //Statistics changes due to merging:
         --free_block_count;
         free_space += sizeof(MallocMetadata);
+        allocated_space += sizeof(MallocMetadata);
         --total_allocated_blocks;
     }
 
@@ -215,7 +217,7 @@ public:
         total_allocated_blocks = BLOCK_COUNT;
     }
 
-    MallocMetadata* getMinimalMatchingFreeBlock(size_t size, bool split=true) {
+    MallocMetadata* getMinimalMatchingFreeBlock(size_t size) {
         for (int i = 0; i < ORDER_COUNT; ++i) {
             if (order_map[i] < size + sizeof(MallocMetadata)) {
                 continue;
@@ -239,7 +241,7 @@ public:
 
     MallocMetadata *findOrAllocateBlock(size_t size);
     MallocMetadata *allocateBlock(size_t size);
-    void setBlockFree(MallocMetadata *block, bool free_value);
+    void setBlockFree(MallocMetadata *block, bool free_value, size_t requested_size=-1);
 
     size_t _num_free_blocks() const;
     size_t _num_free_bytes() const;
@@ -247,9 +249,20 @@ public:
     size_t _num_allocated_bytes() const;
     size_t _num_meta_data_bytes() const;
     size_t _size_meta_data() const;
+
+    int aux_full_fetch_of_free_blocks(int *bytes=nullptr, int *bytesWithoutMetadata=nullptr);
+    int aux_full_fetch_of_used_blocks(int *bytes=nullptr, int *bytesWithoutMetadata=nullptr);
+    int aux_full_fetch_of_allocated_blocks();
+    int aux_full_fetch_of_metadata_bytes ();
+    int aux_full_fetch_of_free_bytes();
+    int aux_full_fetch_of_free_bytes_with_metadata();
+    int aux_full_fetch_of_used_bytes();
+    int aux_full_fetch_of_used_bytes_with_metadata();
+    int aux_full_fetch_of_allocated_bytes();
+    int aux_full_fetch_of_allocated_bytes_with_metadata();
 };
 
-void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value) {
+void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value, size_t requested_size) {
     if (free_value == block->is_free) {
 #ifdef DEBUG
         std::cout << "WARNING: Attempting to free a block that was already freed!" << std::endl;
@@ -257,7 +270,7 @@ void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value) {
         return;
     }
     if (free_value) {
-        free_space += block->size;
+        free_space += block->size - sizeof(MallocMetadata);
         ++free_block_count;
 
         //Remove from used blocks list:
@@ -274,25 +287,28 @@ void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value) {
         }
     }
     else {
-        free_space -= block->size;
+        free_space -= block->size - sizeof(MallocMetadata);
         --free_block_count;
         aux_removeFromFreeBlocks(block);
         aux_addToBlocksList(&used_blocks, block);
-        //TODO: split iteratively
-        bool large_enough = order_from_size(block->size) <= 0 //Got to minimal order, or
-                            || block->size > ((block->size/2) - sizeof(MallocMetadata)); //any smaller is too small
-        while (!large_enough) {
-            auto buddy = (MallocMetadata*)((char*)block + block->size);
+
+        //Split:
+        while (!(
+                order_from_size(block->size) <= 0 //Got to minimal order, or
+                || requested_size > ((block->size/2) - sizeof(MallocMetadata)) //any smaller is too small
+            )) {
+            auto buddy = (MallocMetadata*)((char*)block + block->size/2);
             block->size /= 2;
-            buddy->size /= 2;
+            buddy->size = block->size;
             buddy->is_free = true;
             buddy->next = nullptr;
             buddy->prev = nullptr;
+            ++free_block_count;
+            ++total_allocated_blocks;
+            free_space += buddy->size - sizeof(MallocMetadata);
+            allocated_space -= sizeof(MallocMetadata);
             aux_addToFreeBlocks(buddy);
-            large_enough = order_from_size(block->size) <= 0 //Got to minimal order, or
-                    || block->size > ((block->size/2) - sizeof(MallocMetadata)); //any smaller is too small
         }
-
     }
     block->is_free = free_value;
 }
@@ -300,8 +316,10 @@ void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value) {
 MallocMetadata *BuddyAllocator::allocateBlock(size_t size) {
     initialize_blocks();
 
-    auto block = getMinimalMatchingFreeBlock(size, true);
-    setBlockFree(block, false);
+    if (size == 0 || size > 100000000) return nullptr;
+
+    auto block = getMinimalMatchingFreeBlock(size);
+    setBlockFree(block, false, size);
     return block;
 }
 
@@ -322,7 +340,7 @@ void TEST_several_stuff() {
 MallocMetadata* BuddyAllocator::findOrAllocateBlock(size_t size) {
     if (size == 0 || size > 100000000) return nullptr;
 
-    auto block = getMinimalMatchingFreeBlock(size, true);
+    auto block = getMinimalMatchingFreeBlock(size);
     if (!block) {
         return nullptr;
     }
@@ -421,7 +439,7 @@ void BuddyAllocator::TEST_minimal_matching_no_split() {
     size_t test_set[] = {5, 17, 90, 44, 33, 128, 128 * 1023, 128 * 1000, 128 * 1024 - 41, 128 * 1024 - 40, 128 * 1024 - 39, 128 * 1024};
     for (auto i : test_set) {
         std::cout << "Minimal matching for " << i << " without splitting: "
-                  << getMinimalMatchingFreeBlock(i, false) << std::endl;
+                  << getMinimalMatchingFreeBlock(i) << std::endl;
     }
     std::cout << "(MallocMetadata size is " << sizeof(MallocMetadata) << ".)" << std::endl;
 #endif
@@ -477,4 +495,110 @@ size_t _num_meta_data_bytes() {
 
 size_t _size_meta_data() {
     return sizeof(MallocMetadata);
+}
+
+int BuddyAllocator::aux_full_fetch_of_free_blocks(int *bytes, int *bytesWithoutMetadata) {
+    int total_bytes = 0, total_bytes_without_metadata = 0;
+    int cnt = 0;
+    for (auto list : free_blocks) {
+        while (list) {
+            ++cnt;
+            total_bytes += list->size;
+            total_bytes_without_metadata += list->size - sizeof(MallocMetadata);
+            list = list->next;
+        }
+    }
+
+    if (bytes) *bytes = total_bytes;
+    if (bytesWithoutMetadata) *bytesWithoutMetadata = total_bytes_without_metadata;
+
+    return cnt;
+}
+
+int BuddyAllocator::aux_full_fetch_of_used_blocks(int *bytes, int *bytesWithoutMetadata) {
+    int total_bytes = 0, total_bytes_without_metadata = 0;
+    int cnt = 0;
+    auto curr = used_blocks;
+    while (curr) {
+        total_bytes += curr->size;
+        total_bytes_without_metadata += curr->size - sizeof(MallocMetadata);
+        ++cnt;
+        curr = curr->next;
+    }
+
+    if (bytes) *bytes = total_bytes;
+    if (bytesWithoutMetadata) *bytesWithoutMetadata = total_bytes_without_metadata;
+
+    return cnt;
+}
+
+int BuddyAllocator::aux_full_fetch_of_allocated_blocks() {
+    return aux_full_fetch_of_free_blocks() + aux_full_fetch_of_used_blocks();
+}
+
+int BuddyAllocator::aux_full_fetch_of_metadata_bytes () {
+    return aux_full_fetch_of_allocated_blocks() * (int)sizeof(MallocMetadata);
+}
+
+int BuddyAllocator::aux_full_fetch_of_free_bytes_with_metadata() {
+    int bytes;
+    aux_full_fetch_of_free_blocks(&bytes);
+    return bytes;
+}
+
+int BuddyAllocator::aux_full_fetch_of_free_bytes() {
+    int bytesWithoutMetadata;
+    aux_full_fetch_of_free_blocks(nullptr, &bytesWithoutMetadata);
+    return bytesWithoutMetadata;
+}
+
+int BuddyAllocator::aux_full_fetch_of_used_bytes_with_metadata() {
+    int bytes, bytesWithoutMetadata;
+    aux_full_fetch_of_used_blocks(&bytes, &bytesWithoutMetadata);
+    return bytes;
+}
+
+int BuddyAllocator::aux_full_fetch_of_used_bytes() {
+    int bytesWithoutMetadata;
+    aux_full_fetch_of_used_blocks(nullptr, &bytesWithoutMetadata);
+    return bytesWithoutMetadata;
+}
+
+int BuddyAllocator::aux_full_fetch_of_allocated_bytes_with_metadata() {
+    return aux_full_fetch_of_free_bytes_with_metadata() + aux_full_fetch_of_used_bytes_with_metadata();
+}
+
+int BuddyAllocator::aux_full_fetch_of_allocated_bytes() {
+    return aux_full_fetch_of_free_bytes() + aux_full_fetch_of_used_bytes();
+}
+
+int FULL_free_blocks_count() {
+    return allocator.aux_full_fetch_of_free_blocks();
+}
+int FULL_free_blocks_bytes() {
+    return allocator.aux_full_fetch_of_free_bytes();
+}
+int FULL_used_blocks_count() {
+    return allocator.aux_full_fetch_of_used_blocks();
+}
+int FULL_used_blocks_bytes() {
+    return allocator.aux_full_fetch_of_used_bytes();
+}
+int FULL_allocated_blocks_count() {
+    return allocator.aux_full_fetch_of_allocated_blocks();
+}
+int FULL_allocated_blocks_bytes() {
+    return allocator.aux_full_fetch_of_allocated_bytes();
+}
+int FULL_metadata_bytes () {
+    return allocator.aux_full_fetch_of_metadata_bytes();
+}
+int FULL_free_blocks_bytes_with_metadata() {
+    return allocator.aux_full_fetch_of_free_bytes_with_metadata();
+}
+int FULL_used_blocks_bytes_with_metadata() {
+    return allocator.aux_full_fetch_of_used_bytes_with_metadata();
+}
+int FULL_allocated_blocks_bytes_with_metadata() {
+    return allocator.aux_full_fetch_of_allocated_bytes_with_metadata();
 }
