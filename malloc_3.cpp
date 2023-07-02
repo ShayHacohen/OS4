@@ -16,11 +16,11 @@ struct MallocMetadata {
     bool is_free;
     MallocMetadata* next;
     MallocMetadata* prev;
-    MallocMetadata* buddies[ORDER_COUNT];
 };
 
 class BuddyAllocator {
 private:
+    MallocMetadata* base_heap_addr = nullptr;
     int base_order;
     MallocMetadata* free_blocks[MAX_ORDER + 1];
     MallocMetadata* used_blocks = nullptr;
@@ -107,6 +107,10 @@ private:
         #endif
     }
 
+    void aux_addToFreeBlocks(MallocMetadata* block) {
+        aux_addToBlocksList(&free_blocks[order_from_size(block->size)], block);
+    }
+
     void aux_removeFromFreeBlocks(MallocMetadata* block) {
         int order = order_from_size(block->size);
         if (order < 0) {
@@ -120,7 +124,7 @@ private:
 
     void aux_mergeStep(MallocMetadata** block_ptr) {
         auto block = *block_ptr;
-        auto buddy = block->buddies[order_from_size(block->size)];
+        auto buddy = aux_getBuddy(block);
         if (!(buddy != nullptr && buddy->is_free)) {
             #ifdef DEBUG
             std::cout << "Called aux_mergeStep with non-mergeable blocks.";
@@ -131,13 +135,45 @@ private:
         block->size += buddy->size;
         aux_removeFromBlocksList(block);
         aux_removeFromBlocksList(buddy);
-        aux_addToBlocksList(&free_blocks[order_from_size(block->size)], block);
+        aux_addToFreeBlocks(block);
         *block_ptr = block;
 
         //Statistics changes due to merging:
         --free_block_count;
         free_space += sizeof(MallocMetadata);
         --total_allocated_blocks;
+    }
+
+    /*
+     * This function could be substituted by keeping an integer and using it as a binary value,
+     * where each bit signifies whether the block is the left buddy or the right one
+     * (i.e whether its address was lower or higher, respectively). This only requires an extra
+     * integer and so wouldn't violate the metadata space requirements. This solution makes the metadata
+     * even smaller, though, so I'm going for that (although it might be a little slower).
+     */
+    MallocMetadata* aux_getBuddy(MallocMetadata* block) {
+        if (!initialized) return nullptr; //Shouldn't happen, but eh.
+        if (block->size == order_map[MAX_ORDER]) return nullptr; //No buddies for max-order blocks. (It's lonely at the top or something)
+
+        //Determine if left buddy or right buddy (i.e if buddy should have lower or higher address):
+        if ((((long)block - (long)base_heap_addr) % block->size) != 0) { //Sanity check but I'll leave it here
+            #ifdef DEBUG
+                std::cout << "getBuddy sanity check failed: block addr is " << block
+                    << ", base heap addr is " << base_heap_addr
+                    << ", modulo results in " << (((long)block - (long)base_heap_addr) % block->size)
+                    << std::endl;
+            #endif
+            return nullptr;
+        }
+
+        bool left = (((long)block - (long)base_heap_addr) / block->size) % 2 == 0;
+        auto buddy = (MallocMetadata*)(left ? ((char*)block + block->size) : ((char*)block - block->size));
+        if (!buddy->is_free || buddy->size != block->size)
+        {
+            return nullptr; //Buddy is either allocated or split into a smaller chunk.
+        }
+        return buddy;
+
     }
 public:
     BuddyAllocator(int base_order=BASE_ORDER_SIZE)
@@ -158,19 +194,17 @@ public:
         std::cout << "Initializing buddy allocator." << std::endl;
         #endif
 
-        free_blocks[ORDER_COUNT - 1] = (MallocMetadata*)sbrk(BLOCK_COUNT * order_map[MAX_ORDER]);
+        free_blocks[ORDER_COUNT - 1] = base_heap_addr = (MallocMetadata*)sbrk(BLOCK_COUNT * order_map[MAX_ORDER]);
 
-        *__aux_getBlockByAddressTraversal(MAX_ORDER, 0) = { order_map[ORDER_COUNT - 1], true, nullptr, nullptr, nullptr };
+        *__aux_getBlockByAddressTraversal(MAX_ORDER, 0) = { order_map[ORDER_COUNT - 1], true, nullptr, nullptr };
         free_blocks[ORDER_COUNT - 1]->next = __aux_getBlockByAddressTraversal(MAX_ORDER, 1);
-        *__aux_getBlockByAddressTraversal(MAX_ORDER, BLOCK_COUNT - 1) = { order_map[ORDER_COUNT - 1], true, nullptr, nullptr, nullptr };
+        *__aux_getBlockByAddressTraversal(MAX_ORDER, BLOCK_COUNT - 1) = { order_map[ORDER_COUNT - 1], true, nullptr, nullptr };
         __aux_getBlockByAddressTraversal(MAX_ORDER, ORDER_COUNT - 1)->next = __aux_getBlockByAddressTraversal(MAX_ORDER, ORDER_COUNT - 2);
 
         for (int i = 1; i < BLOCK_COUNT - 1; ++i) {
             auto curr = __aux_getBlockByAddressTraversal(MAX_ORDER, i);
             *curr = { order_map[ORDER_COUNT - 1], true, nullptr, nullptr };
-            for (auto & buddy : curr->buddies) {
-                buddy = nullptr;
-            }
+
             curr->prev = __aux_getBlockByAddressTraversal(MAX_ORDER, i - 1);
             curr->next = __aux_getBlockByAddressTraversal(MAX_ORDER, i + 1);
         }
@@ -228,11 +262,11 @@ void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value) {
 
         //Remove from used blocks list:
         aux_removeFromBlocksList(block);
-        aux_addToBlocksList(&free_blocks[order_from_size(block->size)], block);
+        aux_addToFreeBlocks(block);
 
         //Merge:
         MallocMetadata* buddy;
-        while ((buddy = block->buddies[order_from_size(block->size)]) != nullptr) {
+        while ((buddy = aux_getBuddy(block)) != nullptr) {
             if (!buddy->is_free) {
                 break;
             }
@@ -245,6 +279,20 @@ void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value) {
         aux_removeFromFreeBlocks(block);
         aux_addToBlocksList(&used_blocks, block);
         //TODO: split iteratively
+        bool large_enough = order_from_size(block->size) <= 0 //Got to minimal order, or
+                            || block->size > ((block->size/2) - sizeof(MallocMetadata)); //any smaller is too small
+        while (!large_enough) {
+            auto buddy = (MallocMetadata*)((char*)block + block->size);
+            block->size /= 2;
+            buddy->size /= 2;
+            buddy->is_free = true;
+            buddy->next = nullptr;
+            buddy->prev = nullptr;
+            aux_addToFreeBlocks(buddy);
+            large_enough = order_from_size(block->size) <= 0 //Got to minimal order, or
+                    || block->size > ((block->size/2) - sizeof(MallocMetadata)); //any smaller is too small
+        }
+
     }
     block->is_free = free_value;
 }
@@ -389,11 +437,8 @@ void BuddyAllocator::TEST_print_blocks() {
         int j = 0;
         while (list != nullptr) {
             std::cout << "Block #" << j++ << ": addr=" << list << ", size=" << list->size
-                      << ", " << (list->is_free ? "" : "not ") << "free.\nBuddies are: ";
-            for (auto buddy : list->buddies) {
-                std::cout << buddy << " ";
-            }
-            std::cout << std::endl;
+                      << ", " << (list->is_free ? "" : "not ") << "free.\nBuddy is "
+                      << aux_getBuddy(list) << std::endl;
             list = list->next;
         }
     }
