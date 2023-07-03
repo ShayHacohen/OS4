@@ -40,8 +40,8 @@ private:
         }
         return -1;
     }
-    float kb_to_b(float kb) { return kb / 1024; }
-    float b_to_kb(float b) { return b * 1024; }
+    static float kb_to_b(float kb) { return kb / 1024; }
+    static float b_to_kb(float b) { return b * 1024; }
 
     MallocMetadata* __aux_getBlockByAddressTraversal(int order, int index) {
         return (MallocMetadata*)((char*)free_blocks[order] + order_map[order] * (index));
@@ -73,6 +73,21 @@ private:
         }
         block->next = nullptr;
         block->prev = nullptr;
+    }
+
+    //TODO: handle realloc
+    size_t aux_getMaxMergeableSize(MallocMetadata* block) {
+        auto curr = block;
+        auto curr_size = block->size;
+        while (order_from_size(curr->size) < MAX_ORDER) {
+            auto buddy = aux_getBuddy(block, curr_size);
+            if (!buddy) {
+                break;
+            }
+            curr = block < buddy ? block : buddy;
+            curr_size = block->size + buddy->size;
+        }
+        return curr_size;
     }
 
     void aux_addToBlocksList(MallocMetadata** head_ptr, MallocMetadata* block) {
@@ -110,6 +125,7 @@ private:
 
     void aux_addToFreeBlocks(MallocMetadata* block) {
         aux_addToBlocksList(&free_blocks[order_from_size(block->size)], block);
+        block->is_free = true;
     }
 
     void aux_removeFromFreeBlocks(MallocMetadata* block) {
@@ -132,10 +148,14 @@ private:
             #endif
             return;
         }
-        block = block < buddy ? block : buddy;
+        auto left_buddy = block < buddy ? block : buddy;
+        auto right_buddy = block < buddy ? buddy : block; //Could do sum - min, but not sure if sum might overflow...
+        block = left_buddy;
+        buddy = right_buddy;
         block->size += buddy->size;
-        aux_removeFromBlocksList(block);
-        aux_removeFromBlocksList(buddy);
+        auto &free_list = free_blocks[order_from_size(buddy->size)]; //I hope references don't take up heap storage...
+        aux_removeFromBlocksList(block, &free_list);
+        aux_removeFromBlocksList(buddy, &free_list);
         aux_addToFreeBlocks(block);
         *block_ptr = block;
 
@@ -153,16 +173,17 @@ private:
      * integer and so wouldn't violate the metadata space requirements. This solution makes the metadata
      * even smaller, though, so I'm going for that (although it might be a little slower).
      */
-    MallocMetadata* aux_getBuddy(MallocMetadata* block) {
+    MallocMetadata* aux_getBuddy(MallocMetadata* block, size_t overwrite_size=0) {
+        size_t block_size = overwrite_size ? overwrite_size : block->size;
         if (!initialized) return nullptr; //Shouldn't happen, but eh.
-        if (block->size == order_map[MAX_ORDER]) return nullptr; //No buddies for max-order blocks. (It's lonely at the top or something)
+        if (block_size == order_map[MAX_ORDER]) return nullptr; //No buddies for max-order blocks. (It's lonely at the top or something)
 
         //Determine if left buddy or right buddy (i.e if buddy should have lower or higher address):
-        if ((((long)block - (long)base_heap_addr) % block->size) != 0) { //Sanity check but I'll leave it here
+        if ((((long)block - (long)base_heap_addr) % block_size) != 0) { //Sanity check but I'll leave it here
             #ifdef DEBUG
                 std::cout << "getBuddy sanity check failed: block addr is " << block
                     << ", base heap addr is " << base_heap_addr
-                    << ", modulo results in " << (((long)block - (long)base_heap_addr) % block->size)
+                    << ", modulo results in " << (((long)block - (long)base_heap_addr) % block_size)
                     << std::endl;
             #endif
             return nullptr;
@@ -239,9 +260,10 @@ public:
     void TEST_print_blocks();
     void TEST_minimal_matching_no_split();
 
-    MallocMetadata *findOrAllocateBlock(size_t size);
     MallocMetadata *allocateBlock(size_t size);
-    void setBlockFree(MallocMetadata *block, bool free_value, size_t requested_size=-1);
+    MallocMetadata* attemptInPlaceRealloc(MallocMetadata* block, size_t size);
+    void setBlockFree(MallocMetadata *block, bool free_value, size_t requested_size=0);
+    MallocMetadata* performMerge(MallocMetadata *block, size_t requested_size=0);
 
     size_t _num_free_blocks() const;
     size_t _num_free_bytes() const;
@@ -262,6 +284,27 @@ public:
     int aux_full_fetch_of_allocated_bytes_with_metadata();
 };
 
+MallocMetadata* BuddyAllocator::performMerge(MallocMetadata *block, size_t requested_size) {
+    free_space += block->size - sizeof(MallocMetadata);
+    ++free_block_count;
+
+    //Remove from used blocks list:
+    aux_removeFromBlocksList(block);
+    aux_addToFreeBlocks(block);
+
+    //Merge:
+    MallocMetadata* buddy;
+    while ((buddy = aux_getBuddy(block)) != nullptr
+            && (requested_size <= 0 || requested_size > block->size - sizeof(MallocMetadata))) {
+        if (!buddy->is_free) {
+            break;
+        }
+        aux_mergeStep(&block);
+    }
+
+    return block;
+}
+
 void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value, size_t requested_size) {
     if (free_value == block->is_free) {
 #ifdef DEBUG
@@ -270,21 +313,7 @@ void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value, size_t
         return;
     }
     if (free_value) {
-        free_space += block->size - sizeof(MallocMetadata);
-        ++free_block_count;
-
-        //Remove from used blocks list:
-        aux_removeFromBlocksList(block);
-        aux_addToFreeBlocks(block);
-
-        //Merge:
-        MallocMetadata* buddy;
-        while ((buddy = aux_getBuddy(block)) != nullptr) {
-            if (!buddy->is_free) {
-                break;
-            }
-            aux_mergeStep(&block);
-        }
+        block = performMerge(block);
     }
     else {
         free_space -= block->size - sizeof(MallocMetadata);
@@ -323,6 +352,17 @@ MallocMetadata *BuddyAllocator::allocateBlock(size_t size) {
     return block;
 }
 
+/*
+* NOTE: not actually in-place, but achieved by merging with buddies iteratively until
+* a matching size is acheived
+*/
+MallocMetadata* BuddyAllocator::attemptInPlaceRealloc(MallocMetadata* block, size_t size) {
+    if (size > aux_getMaxMergeableSize(block) - sizeof(MallocMetadata)) {
+        return nullptr;
+    }
+    return performMerge(block, size);
+}
+
 auto allocator = BuddyAllocator();
 
 void TEST_print_orders() {
@@ -335,18 +375,6 @@ void TEST_print_blocks() {
 
 void TEST_several_stuff() {
     allocator.TEST_minimal_matching_no_split();
-}
-
-MallocMetadata* BuddyAllocator::findOrAllocateBlock(size_t size) {
-    if (size == 0 || size > 100000000) return nullptr;
-
-    auto block = getMinimalMatchingFreeBlock(size);
-    if (!block) {
-        return nullptr;
-    }
-
-    setBlockFree(block, false);
-    return block;
 }
 
 void* smalloc(size_t size) {
@@ -389,18 +417,27 @@ void *srealloc(void* oldp, size_t size) {
     auto old_block = (MallocMetadata*)oldp;
     --old_block;
 
-    if (size <= old_block->size) {
+    if (size <= old_block->size - sizeof(MallocMetadata)) {
         return oldp;
     }
 
-    auto newp = (char*)smalloc(size);
-    if (newp == nullptr) {
+    auto newp = allocator.attemptInPlaceRealloc(old_block, size);
+    //TODO: check if malloc_2 handles this right (do we want to free old_block here for sure?)
+
+    if (newp) {
+        std::memmove(newp, oldp, size);
+        return newp;
+    }
+
+    newp = (MallocMetadata*)smalloc(size);
+
+    if (!newp) {
         return nullptr;
     }
 
     std::memmove(newp, oldp, size);
-
     allocator.setBlockFree(old_block, true);
+
     return newp;
 }
 

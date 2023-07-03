@@ -104,10 +104,10 @@ int main() {
     sprintf(str, "hello");
     print_stats("smalloc");
 
-    /*sfree(str);
+    sfree(str);
     print_stats("sfree");
 
-    str = (char*)smalloc(strlen("hello") + 1);
+    /*str = (char*)smalloc(strlen("hello") + 1);
     print_stats("smalloc");
 
     str = (char*)srealloc(str, strlen("hello") + 1);
