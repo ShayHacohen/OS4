@@ -2,6 +2,7 @@
 #include <cstring>
 #include <sys/mman.h>
 #include <cstdlib>
+#include <ctime>
 
 #ifdef DEBUG
 #include <iostream>
@@ -19,32 +20,32 @@ private:
     bool is_free;
     MallocMetadata* next;
     MallocMetadata* prev;
-    uint32_t cookie;
-    void validate_cookie(uint32_t true_cookie) const {
+    int cookie;
+    void validate_cookie(int true_cookie) const {
         if (cookie != true_cookie) {
             exit(0xdeadbeef);
         }
     }
 public:
-    MallocMetadata(size_t size, bool is_free, MallocMetadata* next, MallocMetadata* prev, uint32_t cookie)
+    MallocMetadata(size_t size, bool is_free, MallocMetadata* next, MallocMetadata* prev, int cookie)
         : size(size), is_free(is_free), next(next), prev(prev), cookie(cookie) {}
 
-    size_t get_size(uint32_t true_cookie) const {
+    size_t get_size(int true_cookie) const {
         validate_cookie(true_cookie);
         return size;
     }
 
-    void set_size(uint32_t true_cookie, size_t new_size) {
+    void set_size(int true_cookie, size_t new_size) {
         validate_cookie(true_cookie);
         size = new_size;
     }
 
-    void add_to_size(uint32_t true_cookie, long by) {
+    void add_to_size(int true_cookie, long by) {
         validate_cookie(true_cookie);
         size += by;
     }
 
-    MallocMetadata* split(uint32_t true_cookie) {
+    MallocMetadata* split(int true_cookie) {
         validate_cookie(true_cookie);
         auto buddy = (MallocMetadata*)((char*)this + size/2);
         size /= 2;
@@ -52,32 +53,32 @@ public:
         return buddy;
     }
 
-    bool get_is_free(uint32_t true_cookie) const {
+    bool get_is_free(int true_cookie) const {
         validate_cookie(true_cookie);
         return is_free;
     }
 
-    void set_is_free(uint32_t true_cookie, uint32_t new_is_free) {
+    void set_is_free(int true_cookie, int new_is_free) {
         validate_cookie(true_cookie);
         is_free = new_is_free;
     }
 
-    MallocMetadata* get_next(uint32_t true_cookie) const {
+    MallocMetadata* get_next(int true_cookie) const {
         validate_cookie(true_cookie);
         return next;
     }
 
-    void set_next(uint32_t true_cookie, MallocMetadata* new_next) {
+    void set_next(int true_cookie, MallocMetadata* new_next) {
         validate_cookie(true_cookie);
         next = new_next;
     }
 
-    MallocMetadata* get_prev(uint32_t true_cookie) const {
+    MallocMetadata* get_prev(int true_cookie) const {
         validate_cookie(true_cookie);
         return prev;
     }
 
-    void set_prev(uint32_t true_cookie, MallocMetadata* new_prev) {
+    void set_prev(int true_cookie, MallocMetadata* new_prev) {
         validate_cookie(true_cookie);
         prev = new_prev;
     }
@@ -95,7 +96,7 @@ private:
     int total_allocated_blocks = 0;
     size_t allocated_space = 0;
     size_t free_space = 0;
-    uint32_t cookie = 0;
+    int cookie = 0;
 
     //Auxiliary & convenience member functions & properties:
     size_t order_map[ORDER_COUNT];  //Just for minor runtime optimization purposes.
@@ -277,8 +278,8 @@ public:
      * Seems like rand() only returns up to RAND_MAX which isn't guaranteed to utilize all of an int32's bits,
      * so this generates a 32-bit one in a weird and hacky way. I tried ¯\_('^')_/¯
      */
-    uint32_t aux_randomizeInt32() {
-        uint32_t val = 0;
+    int aux_randomizeInt32() {
+        int val = 0;
 
         for (int cnt = 0; cnt < 32; ++cnt) {
             val = val | ((rand() % 2) << cnt);
@@ -319,7 +320,7 @@ public:
         *last_block = MallocMetadata(order_map[ORDER_COUNT - 1], true, nullptr, nullptr, cookie);
         last_block->set_prev(cookie, aux_getBlockByAddressTraversal(MAX_ORDER, BLOCK_COUNT - 2));
 
-        for (int i = 1; i < BLOCK_COUNT - 1; ++i) {
+        for (long unsigned int i = 1; i < BLOCK_COUNT - 1; ++i) {
             auto curr = aux_getBlockByAddressTraversal(MAX_ORDER, i);
             *curr = MallocMetadata(order_map[ORDER_COUNT - 1], true, nullptr, nullptr, cookie);
 
@@ -459,7 +460,8 @@ MallocMetadata *BuddyAllocator::allocateBlock(size_t size) {
     }
     else {
         block = getMinimalMatchingFreeBlock(size);
-        setBlockFree(block, false, size);
+        if (block)
+            setBlockFree(block, false, size);
     }
 
     return block;
@@ -503,10 +505,11 @@ void* scalloc(size_t num, size_t size) {
     if (addr == nullptr) {
         return nullptr;
     }
+    ++addr;
 
-    std::memset(addr + 1, 0, num * size);
+    std::memset((void*)addr, 0, num * size);
 
-    return addr + 1;
+    return addr;
 }
 
 void sfree(void* p) {
