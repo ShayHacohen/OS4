@@ -131,6 +131,8 @@ int main() {
 
     auto mmapped = smalloc(128 * 1024 + 1);
     print_stats("mmap-smalloc");
+    sprintf((char*)mmapped, "mmap testing wooo\n@@@@@@@@@@@@@@@@@@@@@@@@@\n@@@@@@@@@@@@@@@@@@@@@@@@@\n@@@@@@@@@@@@@@@@@@@@@@@@@\n");
+    cout << "mmapped contents: " << (char*)mmapped << endl;
 
     TEST_print_orders();
     TEST_several_stuff();

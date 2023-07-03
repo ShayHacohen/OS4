@@ -1,8 +1,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <sys/mman.h>
-#include <time.h>
-#include <stdlib.h>
+#include <cstdlib>
 
 #ifdef DEBUG
 #include <iostream>
@@ -531,11 +530,24 @@ void *srealloc(void* oldp, size_t size) {
     auto old_block = (MallocMetadata*)oldp;
     --old_block;
 
-    if (size <= allocator.getBlockSize(old_block) - sizeof(MallocMetadata)) {
-        return oldp;
+    // We were told to assume realloc would only happen between mmap-sized to mmap-sized
+    // or non-map-sized to non-mmap-sized. Handling in accordance.
+
+    MallocMetadata* newp{nullptr};
+
+    if (allocator.isMemoryMapped(old_block)) {
+        if (size == allocator.getBlockSize(old_block)) {
+            return oldp;
+        }
+    }
+    else {
+        if (size <= allocator.getBlockSize(old_block) - sizeof(MallocMetadata)) {
+            return oldp;
+        }
+
+        newp = allocator.attemptInPlaceRealloc(old_block, size);
     }
 
-    auto newp = allocator.attemptInPlaceRealloc(old_block, size);
     //TODO: check if malloc_2 handles this right (do we want to free old_block here for sure?)
 
     if (newp) {
