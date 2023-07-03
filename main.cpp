@@ -71,9 +71,6 @@ void sanity_assertion() {
         valid = valid && (_num_free_blocks() <= _num_allocated_blocks());
         assert(_num_free_blocks() <= _num_allocated_blocks());
 
-        valid = valid && (_num_allocated_bytes() + _num_meta_data_bytes() == 128 * 1024 * 32);
-        assert(_num_allocated_bytes() + _num_meta_data_bytes() == 128 * 1024 * 32);
-
         valid = valid && statistics_sanity_assertion();
     }
     cout << "Sanity check "
@@ -132,8 +129,16 @@ int main() {
         cout << ": " << "orig == " << (void*)orig << ", str == " << (void*)str << endl;
     }
 
-    //TEST_print_orders();
-    TEST_print_blocks();
+    auto mmapped = smalloc(128 * 1024 + 1);
+    print_stats("mmap-smalloc");
+
+    TEST_print_orders();
     TEST_several_stuff();
+    TEST_print_blocks();
+
+    sfree(mmapped);
+    print_stats("sfree");
+    TEST_print_blocks();
+
     return 0;
 }
