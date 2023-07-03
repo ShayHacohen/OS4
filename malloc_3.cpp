@@ -484,7 +484,6 @@ void BuddyAllocator::TEST_minimal_matching_no_split() {
 
 void BuddyAllocator::TEST_print_blocks() {
 #ifdef DEBUG
-    initialize_blocks();
     for (int i = 0; i < ORDER_COUNT; ++i) {
         std::cout << "@ @ @\nIterating over free_blocks of order " << i << " (size: " <<
                   order_map[i] << " bytes)." << std::endl;

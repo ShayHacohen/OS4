@@ -104,10 +104,12 @@ int main() {
     sprintf(str, "hello");
     print_stats("smalloc");
 
+    TEST_print_blocks();
+
     sfree(str);
     print_stats("sfree");
 
-    /*str = (char*)smalloc(strlen("hello") + 1);
+    str = (char*)smalloc(strlen("hello") + 1);
     print_stats("smalloc");
 
     str = (char*)srealloc(str, strlen("hello") + 1);
@@ -132,6 +134,6 @@ int main() {
 
     //TEST_print_orders();
     TEST_print_blocks();
-    TEST_several_stuff();*/
+    TEST_several_stuff();
     return 0;
 }
