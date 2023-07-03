@@ -146,12 +146,12 @@ private:
         auto curr = block;
         auto curr_size = block->get_size(cookie);
         while (order_from_size(curr->get_size(cookie)) < MAX_ORDER) {
-            auto buddy = aux_getBuddy(block, curr_size);
+            auto buddy = aux_getBuddy(curr, curr_size);
             if (!buddy) {
                 break;
             }
-            curr = block < buddy ? block : buddy;
-            curr_size = block->get_size(cookie) + buddy->get_size(cookie);
+            curr = curr < buddy ? curr : buddy;
+            curr_size = curr->get_size(cookie) + buddy->get_size(cookie);
         }
         return curr_size;
     }
@@ -255,9 +255,9 @@ private:
             return nullptr;
         }
 
-        bool left = (((long)block - (long)base_heap_addr) / block->get_size(cookie)) % 2 == 0;
-        auto buddy = (MallocMetadata*)(left ? ((char*)block + block->get_size(cookie)) : ((char*)block - block->get_size(cookie)));
-        if (!buddy->get_is_free(cookie) || buddy->get_size(cookie) != block->get_size(cookie))
+        bool left = (((long)block - (long)base_heap_addr) / block_size) % 2 == 0;
+        auto buddy = (MallocMetadata*)(left ? ((char*)block + block_size) : ((char*)block - block_size));
+        if (!buddy->get_is_free(cookie) || buddy->get_size(cookie) != block_size)
         {
             return nullptr; //Buddy is either allocated or split into a smaller chunk.
         }
