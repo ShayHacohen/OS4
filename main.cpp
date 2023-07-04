@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cstring>
 #include <cassert>
+#include <unistd.h>
 
 using std::cout;
 using std::cin;
@@ -155,14 +156,18 @@ int main() {
     cout << "6 (NOT)" << endl;
     auto not_hugepaged_by_scalloc_1 = scalloc(5, 1024 * 1024 * 2);
     cout << "7 (YES)" << endl;
-    auto hugepaged_by_scalloc = scalloc(2, 1024 * 1024 * 2 + 1);
+    auto hugepaged_by_scalloc_1 = scalloc(2, 1024 * 1024 * 2 + 1);
     cout << "8 (NOT)" << endl;
     auto not_hugepaged_by_scalloc_2 = scalloc(3, 1024 * 1024 * 2 - 1);
+    cout << "9 (YES)" << endl;
+    auto hugepaged_by_scalloc_2 = scalloc(1, 1024 * 1024 * 2 + 1);
 
     cout << "sfree 1: SHOULD NOT COMPLAIN." << endl;
-    sfree(hugepaged_by_scalloc);
+    sfree(hugepaged_by_scalloc_1);
     cout << "sfree 2: SHOULD NOT COMPLAIN." << endl;
     sfree(hugepaged_by_smalloc);
+    cout << "sfree 3: SHOULD NOT COMPLAIN." << endl;
+    sfree(hugepaged_by_scalloc_2);
 
 
     return 0;

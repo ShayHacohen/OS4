@@ -86,6 +86,9 @@ public:
         validate_cookie(true_cookie);
         if (!hugepage) return size;
         auto hugepage_count = ((int)size / VM_HUGEPAGE_LENGTH) + ((size % VM_HUGEPAGE_LENGTH) != 0);
+#ifdef DEBUG
+        std::cout << "HUGEPAGE ALIGNED: " << hugepage_count * VM_HUGEPAGE_LENGTH << std::endl;
+#endif
         return hugepage_count * VM_HUGEPAGE_LENGTH;
     }
 
