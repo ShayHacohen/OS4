@@ -5,4 +5,4 @@ set(CMAKE_CXX_STANDARD 17)
 
 add_definitions("-DDEBUG")
 
-add_executable(sol malloc_3.cpp altmain.cpp altmain.h)
+add_executable(sol malloc_4.cpp main.cpp)

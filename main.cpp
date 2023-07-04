@@ -142,5 +142,28 @@ int main() {
     print_stats("sfree");
     TEST_print_blocks();
 
+    cout << "1 (NOT)" << endl;
+    auto not_hugepaged_by_smalloc_1 = smalloc(1024 * 1024 * 4);
+    cout << "2 (NOT)" << endl;
+    auto not_hugepaged_by_smalloc_2 = smalloc(1024 * 1024 * 4 + 1);
+    cout << "3 (NOT)" << endl;
+    auto not_hugepaged_by_smalloc_3 = smalloc(1024 * 1024 * 4 - 1);
+    cout << "4 (NOT)" << endl;
+    auto not_hugepaged_by_smalloc_4 = smalloc(1024 * 1024 * 4 + _size_meta_data() - 1);
+    cout << "5 (YES)" << endl;
+    auto hugepaged_by_smalloc = smalloc(1024 * 1024 * 4 + _size_meta_data());
+    cout << "6 (NOT)" << endl;
+    auto not_hugepaged_by_scalloc_1 = scalloc(5, 1024 * 1024 * 2);
+    cout << "7 (YES)" << endl;
+    auto hugepaged_by_scalloc = scalloc(2, 1024 * 1024 * 2 + 1);
+    cout << "8 (NOT)" << endl;
+    auto not_hugepaged_by_scalloc_2 = scalloc(3, 1024 * 1024 * 2 - 1);
+
+    cout << "sfree 1: SHOULD NOT COMPLAIN." << endl;
+    sfree(hugepaged_by_scalloc);
+    cout << "sfree 2: SHOULD NOT COMPLAIN." << endl;
+    sfree(hugepaged_by_smalloc);
+
+
     return 0;
 }

@@ -11,6 +11,9 @@
 const size_t BASE_ORDER_SIZE = 128;
 const int MAX_ORDER = 10;
 const unsigned long BLOCK_COUNT = 32;
+const unsigned long VM_HUGEPAGE_LENGTH = 2048 * 1024; //2048 kB, as per /proc/meminfo on the VM.
+const unsigned long SMALLOC_HUGEPAGE_THRESHOLD = 1024 * 1024 * 4; //4 MB, as per the instructions
+const unsigned long SCALLOC_HUGEPAGE_THRESHOLD = 1024 * 1024 * 2; //2 MB, as per the instructions
 
 const int ORDER_COUNT = MAX_ORDER + 1;
 
@@ -21,14 +24,15 @@ private:
     bool is_free;
     MallocMetadata* next;
     MallocMetadata* prev;
+    bool hugepage;
     void validate_cookie(unsigned int true_cookie) const {
         if (cookie != true_cookie) {
             exit(0xdeadbeef);
         }
     }
 public:
-    MallocMetadata(size_t size, bool is_free, MallocMetadata* next, MallocMetadata* prev, unsigned int cookie)
-        : cookie(cookie), size(size), is_free(is_free), next(next), prev(prev) {}
+    MallocMetadata(size_t size, bool is_free, MallocMetadata* next, MallocMetadata* prev, int cookie, size_t singleBlockSize=0)
+            : cookie(cookie), size(size), is_free(is_free), next(next), prev(prev), hugepage(isHugepageSized(size, singleBlockSize)) {}
 
     size_t getSize(unsigned int true_cookie) const {
         validate_cookie(true_cookie);
@@ -77,6 +81,24 @@ public:
         validate_cookie(true_cookie);
         prev = new_prev;
     }
+
+    size_t getHugepageAlignedSize(unsigned int true_cookie) {
+        validate_cookie(true_cookie);
+        if (!hugepage) return size;
+        auto hugepage_count = ((int)size / VM_HUGEPAGE_LENGTH) + ((size % VM_HUGEPAGE_LENGTH) != 0);
+        return hugepage_count * VM_HUGEPAGE_LENGTH;
+    }
+
+    static bool isHugepageSized(size_t size, size_t singleBlockSize=0) {
+        bool hugepage;
+        if (singleBlockSize > 0) {
+            hugepage = singleBlockSize > SCALLOC_HUGEPAGE_THRESHOLD; //Says *larger*.
+        }
+        else {
+            hugepage = size - sizeof(MallocMetadata) >= SMALLOC_HUGEPAGE_THRESHOLD; //Says *equal-to or larger*.
+        }
+        return hugepage;
+    }
 };
 
 class BuddyAllocator {
@@ -110,19 +132,19 @@ private:
     void aux_removeFromBlocksList(MallocMetadata* block, MallocMetadata** head=nullptr) {
         if (!head) {
             if (block->getIsFree(cookie)) {
-                #ifdef DEBUG
+#ifdef DEBUG
                 std::cout << "aux_removeFromBlocksList only supports implicit list head if block is allocated." << std::endl;
-                #endif
+#endif
                 return;
             }
             head = isMemoryMapped(block) ? &mmapped_blocks : &used_blocks;
         }
-        #ifdef DEBUG
+#ifdef DEBUG
         if (*head == nullptr) {
             std::cout << "Tried to remove block from an empty list!" << std::endl;
             return;
         }
-        #endif
+#endif
         if (block->getPrev(cookie)) {
             block->getPrev(cookie)->setNext(cookie, block->getNext(cookie));
         }
@@ -178,9 +200,9 @@ private:
             }
             head = head->getNext(cookie);
         }
-        #ifdef DEBUG
+#ifdef DEBUG
         std::cout << "ERROR: aux_addToBlocksList failed." << std::endl;
-        #endif
+#endif
     }
 
     void aux_addToFreeBlocks(MallocMetadata* block) {
@@ -191,9 +213,9 @@ private:
     void aux_removeFromFreeBlocks(MallocMetadata* block) {
         int order = order_from_size(block->getSize(cookie));
         if (order < 0) {
-            #ifdef DEBUG
+#ifdef DEBUG
             std::cout << "Attempted to remove block with illegal size: " << block->getSize(cookie) << "std::endl";
-            #endif
+#endif
             return;
         }
         aux_removeFromBlocksList(block, &free_blocks[order]);
@@ -206,9 +228,9 @@ private:
             buddy = aux_getBuddy(block);
 
             if (buddy == nullptr || !buddy->getIsFree(cookie)) {
-                #ifdef DEBUG
-                    std::cout << "Called aux_mergeStep with non-mergeable blocks.";
-                #endif
+#ifdef DEBUG
+                std::cout << "Called aux_mergeStep with non-mergeable blocks.";
+#endif
                 return;
             }
         }
@@ -244,12 +266,12 @@ private:
 
         //Determine if left buddy or right buddy (i.e if buddy should have lower or higher address):
         if ((((long)block - (long)base_heap_addr) % block_size) != 0) { //Sanity check but I'll leave it here
-            #ifdef DEBUG
-                std::cout << "getBuddy sanity check failed: block addr is " << block
-                    << ", base heap addr is " << base_heap_addr
-                    << ", modulo results in " << (((long)block - (long)base_heap_addr) % block_size)
-                    << std::endl;
-            #endif
+#ifdef DEBUG
+            std::cout << "getBuddy sanity check failed: block addr is " << block
+                      << ", base heap addr is " << base_heap_addr
+                      << ", modulo results in " << (((long)block - (long)base_heap_addr) % block_size)
+                      << std::endl;
+#endif
             return nullptr;
         }
 
@@ -263,7 +285,7 @@ private:
     }
 public:
     BuddyAllocator(int base_order=BASE_ORDER_SIZE)
-        : base_order(base_order) {
+            : base_order(base_order) {
         free_blocks[0] = nullptr;
         order_map[0] = base_order;
         for (int i = 1; i < ORDER_COUNT; ++i) {
@@ -302,9 +324,9 @@ public:
         if (initialized) { return; }
         initialized = true;
 
-        #ifdef DEBUG
+#ifdef DEBUG
         std::cout << "Initializing buddy allocator." << std::endl;
-        #endif
+#endif
 
         srand(time(nullptr));
         cookie = aux_randomizeInt32();
@@ -354,7 +376,7 @@ public:
     void TEST_print_blocks();
     void TEST_minimal_matching_no_split();
 
-    MallocMetadata *allocateBlock(size_t size);
+    MallocMetadata *allocateBlock(size_t size, int count=-1);
     MallocMetadata* attemptInPlaceRealloc(MallocMetadata* block, size_t size);
     void setBlockFree(MallocMetadata *block, bool free_value, size_t requested_size=0);
     MallocMetadata* performMerge(MallocMetadata *block, size_t requested_size=0);
@@ -389,7 +411,7 @@ MallocMetadata* BuddyAllocator::performMerge(MallocMetadata *block, size_t reque
     //Merge:
     MallocMetadata* buddy;
     while ((buddy = aux_getBuddy(block)) != nullptr
-            && (requested_size <= 0 || requested_size > block->getSize(cookie) - sizeof(MallocMetadata))) {
+           && (requested_size <= 0 || requested_size > block->getSize(cookie) - sizeof(MallocMetadata))) {
         if (!buddy->getIsFree(cookie)) {
             break;
         }
@@ -409,10 +431,14 @@ void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value, size_t
 
     if (isMemoryMapped(block)) {
         aux_removeFromBlocksList(block);
-        auto size = block->getSize(cookie);
+        auto size = block->getHugepageAlignedSize(cookie);
         allocated_space -= size - sizeof(MallocMetadata);
         --total_allocated_blocks;
-        munmap(block, size);
+        if (munmap(block, size) == -1) {
+        #ifdef DEBUG
+            std::cout << "munmap failed." << std::endl;
+        #endif
+        }
         return;
     }
 
@@ -429,7 +455,7 @@ void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value, size_t
         while (!(
                 order_from_size(block->getSize(cookie)) <= 0 //Got to minimal order, or
                 || requested_size > ((block->getSize(cookie) / 2) - sizeof(MallocMetadata)) //any smaller is too small
-            )) {
+        )) {
             auto buddy = block->split(cookie);
             ++free_block_count;
             ++total_allocated_blocks;
@@ -441,16 +467,26 @@ void BuddyAllocator::setBlockFree(MallocMetadata *block, bool free_value, size_t
     block->setIsFree(cookie, free_value);
 }
 
-MallocMetadata *BuddyAllocator::allocateBlock(size_t size) {
+MallocMetadata *BuddyAllocator::allocateBlock(size_t size, int count) {
     initialize_blocks();
 
     if (size == 0 || size > 100000000) return nullptr;
 
+    bool is_scalloc = count > 0, hugepage = MallocMetadata::isHugepageSized(count <= 0 ? size : size*count, count <= 0 ? 0 : size);
+    #ifdef DEBUG
+    if (hugepage) std::cout << "Allocating hugepage." << std::endl;
+    #endif
+
     MallocMetadata* block = nullptr;
     if (size + sizeof(MallocMetadata) >= order_map[MAX_ORDER]) { //We were instructed to only handle over 128KiB or under 128KiB-sizeof(MallocMetadata) – not anything inbetween. Still covering it just in case.
-        block = (MallocMetadata*)mmap(nullptr, size + sizeof(MallocMetadata), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        block = (MallocMetadata*)mmap(nullptr, (is_scalloc ? size*count : size) + sizeof(MallocMetadata), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | (hugepage ? MAP_HUGETLB : 0), -1, 0);
+        if (block == MAP_FAILED) {
+            block = nullptr;
+        }
         if (block) {
-            *block = MallocMetadata(size + sizeof(MallocMetadata), false, nullptr, nullptr, cookie);
+            *block = !is_scalloc
+                    ? MallocMetadata(size + sizeof(MallocMetadata), false, nullptr, nullptr, cookie)
+                    : MallocMetadata(size*count + sizeof(MallocMetadata), false, nullptr, nullptr, cookie, size);
             aux_addToBlocksList(&mmapped_blocks, block);
             ++total_allocated_blocks;
             allocated_space += size;
@@ -501,7 +537,7 @@ void* smalloc(size_t size) {
 }
 
 void* scalloc(size_t num, size_t size) {
-    auto addr = allocator.allocateBlock(num * size);
+    auto addr = allocator.allocateBlock(size, num);
     if (addr == nullptr) {
         return nullptr;
     }
