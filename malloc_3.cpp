@@ -151,7 +151,7 @@ private:
                 break;
             }
             curr = curr < buddy ? curr : buddy;
-            curr_size = curr->get_size(cookie) + buddy->get_size(cookie);
+            curr_size = curr_size + buddy->get_size(cookie);
         }
         return curr_size;
     }
@@ -205,14 +205,18 @@ private:
         aux_removeFromBlocksList(block, &free_blocks[order]);
     }
 
-    void aux_mergeStep(MallocMetadata** block_ptr) {
+    //Buddy here can be fetches by this function, but can also be passed as a parameter for efficiency.
+    void aux_mergeStep(MallocMetadata** block_ptr, MallocMetadata* buddy=nullptr) {
         auto block = *block_ptr;
-        auto buddy = aux_getBuddy(block);
-        if (!(buddy != nullptr && buddy->get_is_free(cookie))) {
-            #ifdef DEBUG
-            std::cout << "Called aux_mergeStep with non-mergeable blocks.";
-            #endif
-            return;
+        if (!buddy) {
+            buddy = aux_getBuddy(block);
+
+            if (buddy == nullptr || !buddy->get_is_free(cookie)) {
+                #ifdef DEBUG
+                    std::cout << "Called aux_mergeStep with non-mergeable blocks.";
+                #endif
+                return;
+            }
         }
         auto left_buddy = block < buddy ? block : buddy;
         auto right_buddy = block < buddy ? buddy : block; //Could do sum - min, but not sure if sum might overflow...
@@ -395,7 +399,7 @@ MallocMetadata* BuddyAllocator::performMerge(MallocMetadata *block, size_t reque
         if (!buddy->get_is_free(cookie)) {
             break;
         }
-        aux_mergeStep(&block);
+        aux_mergeStep(&block, buddy);
     }
 
     return block;
@@ -475,7 +479,9 @@ MallocMetadata* BuddyAllocator::attemptInPlaceRealloc(MallocMetadata* block, siz
     if (size > aux_getMaxMergeableSize(block) - sizeof(MallocMetadata)) {
         return nullptr;
     }
-    return performMerge(block, size);
+    auto new_block = performMerge(block, size);
+    setBlockFree(new_block, false, size);
+    return new_block;
 }
 
 auto allocator = BuddyAllocator();
@@ -536,36 +542,40 @@ void *srealloc(void* oldp, size_t size) {
     // We were told to assume realloc would only happen between mmap-sized to mmap-sized
     // or non-map-sized to non-mmap-sized. Handling in accordance.
 
+    auto old_size = allocator.getBlockSize(old_block);
     MallocMetadata* newp{nullptr};
+    bool in_place{false};
 
     if (allocator.isMemoryMapped(old_block)) {
-        if (size == allocator.getBlockSize(old_block)) {
+        if (size == old_size) {
             return oldp;
         }
     }
     else {
-        if (size <= allocator.getBlockSize(old_block) - sizeof(MallocMetadata)) {
+        if (size <= old_size - sizeof(MallocMetadata)) {
             return oldp;
         }
 
         newp = allocator.attemptInPlaceRealloc(old_block, size);
+        if (newp) {
+            ++newp;
+            in_place = true;
+        }
     }
 
     //TODO: check if malloc_2 handles this right (do we want to free old_block here for sure?)
 
-    if (newp) {
-        std::memmove(newp, oldp, size);
-        return newp;
-    }
-
-    newp = (MallocMetadata*)smalloc(size);
-
     if (!newp) {
-        return nullptr;
+        newp = (MallocMetadata*)smalloc(size);
+        if (!newp) {
+            return nullptr;
+        }
     }
 
-    std::memmove(newp, oldp, size);
-    allocator.setBlockFree(old_block, true);
+    std::memmove(newp, oldp, old_size);
+    if (!in_place) {
+        allocator.setBlockFree(old_block, true);
+    }
 
     return newp;
 }
